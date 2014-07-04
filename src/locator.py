@@ -101,8 +101,9 @@ class Locator:
         # Set signals of widgets  
         QObject.connect(self.dlg.ui.btnSearchStreet, SIGNAL("pressed()"), self.searchStreet)          
         QObject.connect(self.dlg.ui.btnSearch, SIGNAL("pressed()"), self.searchPortal)          
-        QObject.connect(self.dlg.ui.btnClose, SIGNAL("pressed()"), self.close)           
-        QObject.connect(self.dlg.ui.btnSave, SIGNAL("pressed()"), self.saveConfigPressed)           
+        QObject.connect(self.dlg.ui.btnClose, SIGNAL("pressed()"), self.close)                 
+        #self.dlg.ui.btnSave.clicked.connect(self.saveConfigPressed)          
+        self.dlg.ui.btnSave.clicked.connect(lambda:self.saveConfigPressed(True))          
         self.dlg.ui.cboStreetLayer.currentIndexChanged.connect(self.streetLayerChanged)   
         self.dlg.ui.cboPortalLayer.currentIndexChanged.connect(self.portalLayerChanged)   
         
@@ -143,7 +144,7 @@ class Locator:
         # Get all layers (only first time)
         if len(self.layersList) == 0:
             self.getLayers()    
-            # TODO: Load properties file (only first time)
+            # Load properties file (only first time)
             self.loadPropFile()                    
  
         # Show form
@@ -328,20 +329,32 @@ class Locator:
                 return layer
                     
                     
-    def saveConfigPressed(self):
+    def saveConfigPressed(self, isClicked = False):
         
+        self.dlg.ui.toolBox.setCurrentIndex(1)
         if self.saveConfig():
             self.showInfo(u"Fitxer de configuració carregat correctament: "+self.streetProp, MSG_DURATION)
-            self.dlg.ui.toolBox.setCurrentIndex(0)
-        else:
-            self.dlg.ui.toolBox.setCurrentIndex(1)      
+            logger.info("streetCode: "+self.streetCode+" - streetName: "+self.streetName)
+            logger.info("portalCode: "+self.portalCode+" - portalNumber: "+self.portalNumber)  
+            if isClicked:
+                # Save properties file
+                fileProp = open(self.streetProp, 'w')       
+                fileProp.write("STREET_LAYER="+self.streetLayerName+"\n")   
+                fileProp.write("STREET_CODE="+self.streetCode+"\n")   
+                fileProp.write("STREET_NAME="+self.streetName+"\n")   
+                fileProp.write("PORTAL_LAYER="+self.portalLayerName+"\n")   
+                fileProp.write("PORTAL_CODE="+self.portalCode+"\n")   
+                fileProp.write("PORTAL_NUMBER="+self.portalNumber+"\n")   
+                fileProp.close()    
               
 
     def saveConfig(self):    
         
         self.dlg.ui.cboStreet.clear()
+        self.streetLayerName = self.dlg.ui.cboStreetLayer.currentText()
         self.streetCode = self.dlg.ui.cboStreetCode.currentText()
         self.streetName = self.dlg.ui.cboStreetName.currentText()
+        self.portalLayerName = self.dlg.ui.cboPortalLayer.currentText()
         self.portalCode = self.dlg.ui.cboPortalCode.currentText()
         self.portalNumber = self.dlg.ui.cboPortalNumber.currentText()
         if (self.streetCode == ''):
@@ -356,21 +369,18 @@ class Locator:
         if (self.portalNumber == ''):
             self.showWarning(u"Cal especificar camp que conté el número de policia", MSG_DURATION)
             return False
-        logger.info("streetCode: "+self.streetCode+" - streetName: "+self.streetName)
-        logger.info("portalCode: "+self.portalCode+" - portalNumber: "+self.portalNumber)
         
         self.listStreetCode = [""]
         self.listStreetName = [""]
         for feature in self.streetLayer.getFeatures():   
             self.listStreetCode.append(feature[self.streetCode])
-            self.listStreetName.append(feature[self.streetName])
+            self.listStreetName.append(unicode(feature[self.streetName]))
             self.streetDict[feature[self.streetCode]] = feature[self.streetName]
-             
+          
         self.listStreetName.sort()         
         model = QStringListModel()
         model.setStringList(self.listStreetName)  
         completer = QCompleter()
-        #completer.setCompletionColumn(0)
         completer.setCaseSensitivity(Qt.CaseInsensitive)
         completer.setModel(model)
         completer.setMaxVisibleItems(10)
