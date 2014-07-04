@@ -27,30 +27,13 @@ from PyQt4.QtSql import *
 from qgis.core import *
 from dialog_locator import DialogLocator
 from utils import *
-import psycopg2
-import psycopg2.extras
-import os.path
-import sys
 
 
 class Locator:
     
-    global HOST, PORT, DB, USER, PWD
-    global ZOOM_POINT_SCALE, STREET_LAYER, PORTAL_LAYER
-    HOST = "localhost"
-    PORT = 5432
-    DB = "gesplan"
-    USER = "roses"
-    PWD = "pw_roses"
+    global ZOOM_POINT_SCALE
     
-    # TODO: Configuration
     ZOOM_POINT_SCALE = 2000
-    STREET_LAYER = "carrerer_eixos"
-    PORTAL_LAYER = "carrerer_portals"
-    STREET_ID = "ccar"
-    STREET_NAME = "nombre"
-    PORTAL_ID = "numero"
-    PORTAL_STREET_ID = "carrer_id"
     
 
     def __init__(self, iface):
@@ -64,9 +47,8 @@ class Locator:
         self.plugin_dir = os.path.dirname(__file__)
         
         # Enable logging
-        logger = setLogger(__name__, self.plugin_dir + "/log", "logfile.log")    
-        logger.setLevel(logging.DEBUG) 
-        logger.debug('Plugin folder: ' + self.plugin_dir)
+        logger = setLogger(__name__, self.plugin_dir + "/log", "log.log")    
+        logger.info('Plugin folder: '+self.plugin_dir)
                 
         # initialize locale
         locale = QSettings().value("locale/userLocale")[0:2]
@@ -76,6 +58,9 @@ class Locator:
             self.translator.load(localePath)
             if qVersion() > '4.3.3':
                 QCoreApplication.installTranslator(self.translator)
+                
+        self.streetDict = {}  
+        self.layersList = []              
 
 
     def initGui(self):
@@ -102,159 +87,129 @@ class Locator:
             self.showMessageBar("UI form not loaded")            
             return
         
-        # Connect buttons   
-        QObject.connect(self.dlg.ui.btnSearch, SIGNAL("pressed()"), self.accept)          
+        # Set scales zoom
+        self.setScalesZoom()
+        
+        # Set signals of widgets  
+        QObject.connect(self.dlg.ui.btnSearchStreet, SIGNAL("pressed()"), self.searchStreet)          
+        QObject.connect(self.dlg.ui.btnSearch, SIGNAL("pressed()"), self.search)          
         QObject.connect(self.dlg.ui.btnClose, SIGNAL("pressed()"), self.close)           
-        
-        # Connect to Database
-        self.connectDb()    
-        self.createConnection()
-        
-        # Set models
-        self.modelStreet()   
-            
-        # Get street and portal layers
-        self.getLayers()
+        QObject.connect(self.dlg.ui.btnSave, SIGNAL("pressed()"), self.saveConfig)           
+        self.dlg.ui.cboStreetLayer.currentIndexChanged.connect(self.streetLayerChanged)   
+        self.dlg.ui.cboPortalLayer.currentIndexChanged.connect(self.portalLayerChanged)   
         
         # Open form   
         self.dlg.setWindowTitle(u"Street Locator")
         self.dlg.move(10, 300)                  
         
 
+    # Executed when function key or icon is pressed       
     def openForm(self):
-                
-        logger.debug("openForm")
-                        
-        # Executed when function key or icon is pressed   
-        global widgets   
-             
-        # Get widgets from form
-        widgets = getWidgetsForm(self.dlg.ui)             
+                                              
+        # Get all layers
+        if len(self.layersList) == 0:
+            logger.info("1openForm")
+            self.getLayers()            
  
         # Show form
         self.dlg.show()   
+        self.dlg.activateWindow();
+            
         
+    def setScalesZoom(self):
         
-    # Connect to Database    
-    def connectDb(self):
-        
-        global conn, cursor
-        try:
-            conn = psycopg2.connect("host="+HOST+" port="+str(PORT)+" dbname="+DB+" user="+USER+" password="+PWD)              
-            cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-            setCursor(cursor)        
-        except psycopg2.DatabaseError, e:
-            logger.warning('Error %s' % e)
-                
-    
-    def createConnection(self):
-        
-        self.db = QSqlDatabase.addDatabase("QPSQL");
-        self.db.setHostName(HOST)
-        self.db.setPort(PORT)
-        self.db.setDatabaseName(DB)
-        self.db.setUserName(USER)
-        self.db.setPassword(PWD)
-        if not self.db.open():
-            logger.warning(self.db.lastError().text())
+        self.dlg.ui.cboScaleZoom.addItem("500")
+        self.dlg.ui.cboScaleZoom.addItem("1000")
+        self.dlg.ui.cboScaleZoom.addItem("2000")
+        self.dlg.ui.cboScaleZoom.addItem("5000")
+        self.dlg.ui.cboScaleZoom.addItem("10000")
+        self.dlg.ui.cboScaleZoom.setCurrentIndex(2)
         
         
     def getLayers(self):
         
-        layers = self.iface.legendInterface().layers()
+        logger.info("getLayers")
         
-        # Iterate over all layers. Check if they are vector, are visible
-        for layer in layers:
+        self.dlg.ui.cboStreetLayer.addItem("")
+        self.dlg.ui.cboPortalLayer.addItem("")
+        self.layers = self.iface.legendInterface().layers()
+        
+        # Iterate over all layers
+        for layer in self.layers:
             layerType = layer.type()
             logger.debug(layer.name())
+            # Check if they are vector
             if layerType == QgsMapLayer.VectorLayer:
-                visible = self.iface.legendInterface().isLayerVisible(layer)
-                if visible and layer.name() == STREET_LAYER:
-                    self.streetLayer = layer
-                if visible and layer.name() == PORTAL_LAYER:
-                    self.portalLayer = layer
-                    
-            
-    def modelStreet(self):
-             
-        # Set SQL model              
-        sql = "SELECT '' as ccar, '' as nombre "
-        sql+= " UNION"             
-        sql+= " SELECT ccar, nombre" 
-        sql+= " FROM carrerer_eixos"
-        sql+= " ORDER BY nombre" 
-        logger.debug(sql) 
-        self.model = QSqlQueryModel();
-        self.model.setQuery(sql, self.db);
-       
-        # Set model to view
-        self.dlg.ui.cboStreet.setModel(self.model)
-        self.dlg.ui.cboStreet.setModelColumn(1)        
-        completer = QCompleter(self.model)
-        completer.setCompletionColumn(1)
-        completer.setCaseSensitivity(Qt.CaseInsensitive)
-        completer.setModel(self.model)
-        completer.setMaxVisibleItems(10)
-        self.dlg.ui.cboStreet.setCompleter(completer)   
+                self.layersList.append(layer)
+                self.dlg.ui.cboStreetLayer.addItem(layer.name())
+                self.dlg.ui.cboPortalLayer.addItem(layer.name()) 
         
-        # Set signals
-        self.dlg.ui.cboStreet.currentIndexChanged.connect(self.streetChanged)
-        completer.activated.connect(self.streetChanged)
+
+    def streetChanged(self, valor):      
         
-        
-    def streetChanged(self, valor):        
-                
-        # Get ccar of selected street
-        ccar = self.model.data(self.model.index(self.dlg.ui.cboStreet.currentIndex(), 0))
         name = self.dlg.ui.cboStreet.currentText()
         if (name == ''):
-            self.dlg.ui.cboPortal.setModel(QSqlQueryModel())
             return
         
-        # Get portals from selected street
-        # Set SQL model   
-        sql = "SELECT '' as numero, 0 as numero_n "
-        sql+= " UNION"
-        sql+= " SELECT numero, numero_n" 
-        sql+= " FROM carrerer_portals"
-        sql+= " WHERE carrer_id = '"+ccar+"'"
-        sql+= " ORDER BY numero_n" 
-        self.modelPortal = QSqlQueryModel();
-        self.modelPortal.setQuery(sql, self.db);
-        
-        # Set model to view
-        self.dlg.ui.cboPortal.setModel(self.modelPortal)
-        self.dlg.ui.cboPortal.setModelColumn(0)        
-        completer = QCompleter(self.modelPortal)
-        completer.setModel(self.modelPortal)
-        completer.setMaxVisibleItems(8)
-        self.dlg.ui.cboPortal.setCompleter(completer)   
-        
-        # Set signals
-        #self.dlg.ui.cboPortal.currentIndexChanged.connect(self.portalChanged)
-        #completer.activated.connect(self.portalChanged)        
-        
-        
-    def accept(self):    
+        # Get portals from selected street code
+        selectedStreetCode = [key for key, value in self.streetDict.iteritems() if value == name][0]        
+        self.listPortalNumber = [""]
+        for feature in self.portalLayer.getFeatures(): 
+            if feature[self.portalCode] == selectedStreetCode: 
+                self.listPortalNumber.append(feature[self.portalNumber])
+             
+        self.listPortalNumber.sort()         
+        model = QStringListModel()
+        model.setStringList(self.listPortalNumber)  
+        completer = QCompleter()
+        completer.setCompletionColumn(0)
+        completer.setCaseSensitivity(Qt.CaseInsensitive)
+        completer.setModel(model)
+        completer.setMaxVisibleItems(10)
+        self.dlg.ui.cboPortal.setModel(model)   
+        self.dlg.ui.cboPortal.setCompleter(completer) 
+                
+     
+    def searchStreet(self):    
        
         # Get selected street (and portal)
-        ccar = self.model.data(self.model.index(self.dlg.ui.cboStreet.currentIndex(), 0))
         name = self.dlg.ui.cboStreet.currentText()
         if (name == ''):
             logger.info("Cap carrer especificat")
             return
+        if len(self.streetDict) == 0:
+            logger.info("No s'ha trobat cap carrer")
+            return        
+        ccar = [key for key, value in self.streetDict.iteritems() if value == name][0]
+        
+        self.zoomToStreet(str(ccar))
+            
+            
+    def search(self):    
+       
+        # Get selected street (and portal)
+        name = self.dlg.ui.cboStreet.currentText()
+        if (name == ''):
+            logger.info("Cap carrer especificat")
+            return
+        if len(self.streetDict) == 0:
+            logger.info("No s'ha trobat cap carrer")
+            return
+        #ccar = self.model.data(self.model.index(self.dlg.ui.cboStreet.currentIndex(), 0))
+        ccar = [key for key, value in self.streetDict.iteritems() if value == name][0]
         
         portal = self.dlg.ui.cboPortal.currentText()
         logger.debug(portal)    
         if (portal == ""):
-            self.zoomToStreet(ccar)
+            self.zoomToStreet(str(ccar))
         else:
-            self.zoomToPortal(ccar, portal)
+            self.zoomToPortal(str(ccar), portal)
             
         
     def zoomToStreet(self, ccar):    
                      
-        exp = "ccar = '"+ccar+"'"     
+        #exp = "ccar = '"+ccar+"'"     
+        exp = self.streetCode+" = '"+ccar+"'"     
         self.setFilter(self.streetLayer, exp)          
         self.zoomToSelected(self.streetLayer)   
         self.portalLayer.removeSelection()   
@@ -262,12 +217,14 @@ class Locator:
           
     def zoomToPortal(self, ccar, portal):    
                      
-        exp = "carrer_id = '"+ccar+"' AND numero = '"+portal+"'"     
+        #exp = "carrer_id = '"+ccar+"' AND numero = '"+portal+"'"     
+        exp = self.portalCode+" = '"+ccar+"' AND "+self.portalNumber+" = '"+portal+"'"     
         self.setFilter(self.portalLayer, exp)          
         
         # Zoom to point scale
         self.zoomToSelected(self.portalLayer)
-        self.iface.mapCanvas().zoomScale(ZOOM_POINT_SCALE)    
+        scale = self.dlg.ui.cboScaleZoom.currentText()
+        self.iface.mapCanvas().zoomScale(int(scale))    
         self.streetLayer.removeSelection()  
         
         
@@ -296,7 +253,91 @@ class Locator:
         self.iface.mapCanvas().setExtent(box)
         self.iface.mapCanvas().refresh() 
                          
+                         
+    # Configuration signals           
+    def streetLayerChanged(self):   
+        
+        streetLayerName = self.dlg.ui.cboStreetLayer.currentText()
+        self.dlg.ui.cboStreetCode.clear()
+        self.dlg.ui.cboStreetName.clear()
+        if (streetLayerName != ""):
+            self.dlg.ui.cboStreetCode.addItem("")
+            self.dlg.ui.cboStreetName.addItem("")
+            self.streetLayer = self.getLayerByName(streetLayerName)
+            # Get fields of selected layer
+            for field in self.streetLayer.dataProvider().fields():
+                self.dlg.ui.cboStreetCode.addItem(field.name())
+                self.dlg.ui.cboStreetName.addItem(field.name())        
+        
+        
+    def portalLayerChanged(self):   
+        
+        portalLayerName = self.dlg.ui.cboPortalLayer.currentText()
+        self.dlg.ui.cboPortalCode.clear()
+        self.dlg.ui.cboPortalNumber.clear()
+        if (portalLayerName != ""):
+            self.dlg.ui.cboPortalCode.addItem("")
+            self.dlg.ui.cboPortalNumber.addItem("")
+            self.portalLayer = self.getLayerByName(portalLayerName)
+            # Get fields of selected layer
+            for field in self.portalLayer.dataProvider().fields():
+                self.dlg.ui.cboPortalCode.addItem(field.name())
+                self.dlg.ui.cboPortalNumber.addItem(field.name())    
+                        
+        
+    def getLayerByName(self, layerName):
+        
+        for layer in self.layers:
+            logger.debug(layer.name())
+            if layer.name() == layerName:
+                return layer
                             
+
+    def saveConfig(self):    
+        
+        self.dlg.ui.cboStreet.clear()
+        self.streetCode = self.dlg.ui.cboStreetCode.currentText()
+        self.streetName = self.dlg.ui.cboStreetName.currentText()
+        self.portalCode = self.dlg.ui.cboPortalCode.currentText()
+        self.portalNumber = self.dlg.ui.cboPortalNumber.currentText()
+        logger.debug("Code: "+self.streetCode+" - Name: "+self.streetName)
+        if (self.streetCode == ''):
+            logger.info("Cal especificar camp que conté el codi del carrer")
+            return
+        if (self.streetName == ''):
+            logger.info("Cal especificar camp que conté el nom del carrer")
+            return
+        if (self.portalCode == ''):
+            logger.info("Cal especificar camp que conté l'enllaç al codi del carrer")
+            return
+        if (self.portalNumber == ''):
+            logger.info("Cal especificar camp que conté el número de policia")
+            return
+        
+        #self.streetDict = {}
+        self.listStreetCode = [""]
+        self.listStreetName = [""]
+        for feature in self.streetLayer.getFeatures():   
+            self.listStreetCode.append(feature[self.streetCode])
+            self.listStreetName.append(feature[self.streetName])
+            self.streetDict[feature[self.streetCode]] = feature[self.streetName]
+             
+        self.listStreetName.sort()         
+        model = QStringListModel()
+        model.setStringList(self.listStreetName)  
+        completer = QCompleter()
+        completer.setCompletionColumn(0)
+        completer.setCaseSensitivity(Qt.CaseInsensitive)
+        completer.setModel(model)
+        completer.setMaxVisibleItems(10)
+        self.dlg.ui.cboStreet.setModel(model)   
+        self.dlg.ui.cboStreet.setCompleter(completer) 
+        
+        # Set signals
+        self.dlg.ui.cboStreet.currentIndexChanged.connect(self.streetChanged)
+        completer.activated.connect(self.streetChanged)              
+                                
+                                
     def close(self):
         
         self.dlg.setVisible(False);

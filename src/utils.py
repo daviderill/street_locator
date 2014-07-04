@@ -53,26 +53,25 @@ def setLogger(name, folder, filename):
     # create file handler
     if not os.path.exists(folder):
         os.makedirs(folder)
-    filepath = folder + "/" + filename
-    #print filepath    
+    filepath = folder + "/" + filename 
     fh = logging.FileHandler(filepath)
     fh.setLevel(logging.INFO)
     
     # create console handler
-    ch = logging.StreamHandler()
-    ch.setLevel(logging.INFO)
+    #ch = logging.StreamHandler()
+    #ch.setLevel(logging.INFO)
     
     # create formatter and add it to the handlers
     formatter_fh = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    formatter_ch = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    #formatter_ch = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     fh.setFormatter(formatter_fh)
-    ch.setFormatter(formatter_ch)
+    #ch.setFormatter(formatter_ch)
     
     # add the handlers to logger
     if (len(logger.handlers) > 0):  
         removeHandlers(logger) 
     logger.addHandler(fh)
-    logger.addHandler(ch)   
+    #logger.addHandler(ch)   
     
     return logger
     
