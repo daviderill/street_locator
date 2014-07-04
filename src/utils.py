@@ -8,9 +8,10 @@ import os.path
 #	
 # Utility funcions	
 #
-def setCursor(p_cursor):
-    global cursor
-    cursor = p_cursor
+def setTextCombo(combo, text):
+    index = combo.findText(text)
+    if index > -1:
+        combo.setCurrentIndex(index)
     
     
 def getWidgetsForm(form):

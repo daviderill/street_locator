@@ -25,15 +25,19 @@ from PyQt4.QtCore import *
 from PyQt4.QtGui import *
 from PyQt4.QtSql import *
 from qgis.core import *
+from qgis.gui import QgsMessageBar
 from dialog_locator import DialogLocator
 from utils import *
+import os.path
 
 
 class Locator:
     
-    global ZOOM_POINT_SCALE
+    global MSG_DURATION, ZOOM_POINT_SCALE, PROP_NAME
     
+    MSG_DURATION = 5
     ZOOM_POINT_SCALE = 2000
+    PROP_NAME = "street.properties"
     
 
     def __init__(self, iface):
@@ -47,7 +51,7 @@ class Locator:
         self.plugin_dir = os.path.dirname(__file__)
         
         # Enable logging
-        logger = setLogger(__name__, self.plugin_dir + "/log", "log.log")    
+        logger = setLogger(__name__, self.plugin_dir+"/log", "logfile.log")    
         logger.info('Plugin folder: '+self.plugin_dir)
                 
         # initialize locale
@@ -60,15 +64,16 @@ class Locator:
                 QCoreApplication.installTranslator(self.translator)
                 
         self.streetDict = {}  
-        self.layersList = []              
+        self.layersList = []   
+        self.proj = None  
+        self.propDict = {}  
+        self.show = True   
 
 
-    def initGui(self):
-        
-        logger.debug("initGUI")
+    def initGui(self): 
         
         # Create action that will start plugin configuration
-        icon = QIcon(os.path.dirname(__file__) + "/icons/icon.png")
+        icon = QIcon(os.path.dirname(__file__)+"/icons/icon.png")
         self.action = QAction(icon, u"Street Locator", self.iface.mainWindow())
         
         # connect the action to the run method
@@ -84,17 +89,20 @@ class Locator:
         # Create the dialog (after translation) and keep reference
         self.dlg = DialogLocator()   
         if not self.dlg:        
-            self.showMessageBar("UI form not loaded")            
+            self.showMessageBar("No s'ha pogut carregar el formulari de l'extensió Street Locator")            
             return
+        
+        # Load properties file
+        #self.loadPropFile()
         
         # Set scales zoom
         self.setScalesZoom()
         
         # Set signals of widgets  
         QObject.connect(self.dlg.ui.btnSearchStreet, SIGNAL("pressed()"), self.searchStreet)          
-        QObject.connect(self.dlg.ui.btnSearch, SIGNAL("pressed()"), self.search)          
+        QObject.connect(self.dlg.ui.btnSearch, SIGNAL("pressed()"), self.searchPortal)          
         QObject.connect(self.dlg.ui.btnClose, SIGNAL("pressed()"), self.close)           
-        QObject.connect(self.dlg.ui.btnSave, SIGNAL("pressed()"), self.saveConfig)           
+        QObject.connect(self.dlg.ui.btnSave, SIGNAL("pressed()"), self.saveConfigPressed)           
         self.dlg.ui.cboStreetLayer.currentIndexChanged.connect(self.streetLayerChanged)   
         self.dlg.ui.cboPortalLayer.currentIndexChanged.connect(self.portalLayerChanged)   
         
@@ -102,14 +110,41 @@ class Locator:
         self.dlg.setWindowTitle(u"Street Locator")
         self.dlg.move(10, 300)                  
         
+        
+    def loadPropFile(self):
+        
+        # Get current .qgs path. Then custom and default .properties file
+        proj = QgsProject.instance()
+        self.streetProp = proj.homePath()+"/"+PROP_NAME
+        logger.info("Project folder: "+proj.homePath())  
+        
+        # Open .properties file and load parameters in a dictionary
+        if not os.path.isfile(self.streetProp):
+            self.showInfo("No s'ha trobat el fitxer de configuració: "+self.streetProp, MSG_DURATION)
+            self.dlg.ui.toolBox.setCurrentIndex(1)
+            return   
+        
+        #fileProp = open(self.streetProp, 'r')
+        self.propDict = dict(line.strip().split('=') for line in open(self.streetProp))
+        
+        # Set Configuration panel
+        setTextCombo(self.dlg.ui.cboStreetLayer, self.propDict["STREET_LAYER"])
+        setTextCombo(self.dlg.ui.cboStreetCode, self.propDict["STREET_CODE"])
+        setTextCombo(self.dlg.ui.cboStreetName, self.propDict["STREET_NAME"])
+        setTextCombo(self.dlg.ui.cboPortalLayer, self.propDict["PORTAL_LAYER"])
+        setTextCombo(self.dlg.ui.cboPortalCode, self.propDict["PORTAL_CODE"])
+        setTextCombo(self.dlg.ui.cboPortalNumber, self.propDict["PORTAL_NUMBER"])
+        self.saveConfigPressed()
+                       
 
     # Executed when function key or icon is pressed       
     def openForm(self):
-                                              
-        # Get all layers
+                                                                     
+        # Get all layers (only first time)
         if len(self.layersList) == 0:
-            logger.info("1openForm")
-            self.getLayers()            
+            self.getLayers()    
+            # TODO: Load properties file (only first time)
+            self.loadPropFile()                    
  
         # Show form
         self.dlg.show()   
@@ -185,7 +220,7 @@ class Locator:
         self.zoomToStreet(str(ccar))
             
             
-    def search(self):    
+    def searchPortal(self):    
        
         # Get selected street (and portal)
         name = self.dlg.ui.cboStreet.currentText()
@@ -271,7 +306,7 @@ class Locator:
         
         
     def portalLayerChanged(self):   
-        
+                
         portalLayerName = self.dlg.ui.cboPortalLayer.currentText()
         self.dlg.ui.cboPortalCode.clear()
         self.dlg.ui.cboPortalNumber.clear()
@@ -291,7 +326,16 @@ class Locator:
             logger.debug(layer.name())
             if layer.name() == layerName:
                 return layer
-                            
+                    
+                    
+    def saveConfigPressed(self):
+        
+        if self.saveConfig():
+            self.showInfo(u"Fitxer de configuració carregat correctament: "+self.streetProp, MSG_DURATION)
+            self.dlg.ui.toolBox.setCurrentIndex(0)
+        else:
+            self.dlg.ui.toolBox.setCurrentIndex(1)      
+              
 
     def saveConfig(self):    
         
@@ -300,21 +344,21 @@ class Locator:
         self.streetName = self.dlg.ui.cboStreetName.currentText()
         self.portalCode = self.dlg.ui.cboPortalCode.currentText()
         self.portalNumber = self.dlg.ui.cboPortalNumber.currentText()
-        logger.debug("Code: "+self.streetCode+" - Name: "+self.streetName)
         if (self.streetCode == ''):
-            logger.info("Cal especificar camp que conté el codi del carrer")
-            return
+            self.showWarning(u"Cal especificar camp que conté el codi del carrer", MSG_DURATION)
+            return False
         if (self.streetName == ''):
-            logger.info("Cal especificar camp que conté el nom del carrer")
-            return
+            self.showWarning(u"Cal especificar camp que conté el nom del carrer", MSG_DURATION)
+            return False
         if (self.portalCode == ''):
-            logger.info("Cal especificar camp que conté l'enllaç al codi del carrer")
-            return
+            self.showWarning(u"Cal especificar camp que conté l'enllaç al codi del carrer", MSG_DURATION)
+            return False
         if (self.portalNumber == ''):
-            logger.info("Cal especificar camp que conté el número de policia")
-            return
+            self.showWarning(u"Cal especificar camp que conté el número de policia", MSG_DURATION)
+            return False
+        logger.info("streetCode: "+self.streetCode+" - streetName: "+self.streetName)
+        logger.info("portalCode: "+self.portalCode+" - portalNumber: "+self.portalNumber)
         
-        #self.streetDict = {}
         self.listStreetCode = [""]
         self.listStreetName = [""]
         for feature in self.streetLayer.getFeatures():   
@@ -326,7 +370,7 @@ class Locator:
         model = QStringListModel()
         model.setStringList(self.listStreetName)  
         completer = QCompleter()
-        completer.setCompletionColumn(0)
+        #completer.setCompletionColumn(0)
         completer.setCaseSensitivity(Qt.CaseInsensitive)
         completer.setModel(model)
         completer.setMaxVisibleItems(10)
@@ -335,8 +379,29 @@ class Locator:
         
         # Set signals
         self.dlg.ui.cboStreet.currentIndexChanged.connect(self.streetChanged)
-        completer.activated.connect(self.streetChanged)              
-                                
+        completer.activated.connect(self.streetChanged)       
+        return True     
+              
+              
+    def showInfo(self, text, duration = None):
+        
+        if self.show:
+            if duration is None:
+                self.iface.messageBar().pushMessage("", text, QgsMessageBar.INFO)  
+            else:
+                self.iface.messageBar().pushMessage("", text, QgsMessageBar.INFO, duration)              
+        logger.info(text)    
+        
+          
+    def showWarning(self, text, duration = None):
+        
+        if self.show:
+            if duration is None:
+                self.iface.messageBar().pushMessage("", text, QgsMessageBar.WARNING)  
+            else:
+                self.iface.messageBar().pushMessage("", text, QgsMessageBar.WARNING, duration)              
+        logger.warning(text)    
+                                        
                                 
     def close(self):
         
